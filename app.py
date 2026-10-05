@@ -1,4 +1,3 @@
-import base64
 import csv
 import io
 import json
@@ -10,7 +9,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from xml.sax.saxutils import escape
 
 from flask import Flask, jsonify, request, session, send_file
-from Bin import decrypt_aes_cbc_pkcs7, hex_to_bytes, check_fingerprints, check_fingerprint_templates, count_household_ids
+from Bin import decrypt_aes_cbc_pkcs7, hex_to_bytes, check_fingerprints, check_fingerprint_templates, count_household_ids, is_fmr
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -20,14 +19,6 @@ IV = os.environ.get('BIN_AES_IV', '4a6f8e2f8a0c5d3e4b6c8d9e0f1a2b3c')
 cache = {}
 lock = RLock()
 HEADERS = ['File', 'Household', 'Role', 'Name', 'Photo', 'Fingerprints', 'Status', 'FMR signatures', 'Invalid / non-FMR templates']
-
-
-def is_fmr(value: str) -> bool:
-    try:
-        decoded = base64.b64decode(value, validate=True)
-        return len(decoded) >= 3 and decoded[:3] == b"FMR"
-    except (ValueError, TypeError):
-        return False
 
 
 def state():
