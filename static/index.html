@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Payroll BIN File Viewer</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<body>
+<header><div class="brand">B<span>BIN VIEWER</span></div><span class="privacy">● Local & private</span></header>
+<main>
+<div class="intro"><span class="eyebrow">PAYROLL WORKSPACE</span><h1>Your payroll data, clearly.</h1><p>Decrypt BIN files and review households, alternates, and biometric coverage in one place.</p></div>
+<section class="upload"><div id="drop" tabindex="0" role="button" aria-label="Choose BIN files"><div class="upload-icon">↑</div><h2>Drop your BIN files here</h2><p>or <span class="choose">browse files</span> · Multiple files supported · 32 MB per batch</p><input type="file" id="picker" accept=".bin" multiple hidden></div><div class="upload-footer"><span id="selection">No files selected</span><button id="process" disabled>Decrypt & view data →</button></div></section>
+<p id="message" role="status" aria-live="polite"></p>
+<section class="stats" aria-label="Combined summary"><div><span>Uploaded files</span><strong id="file-count">0</strong><small id="success-count">Ready to upload</small></div><div><span>Households</span><strong id="household-count">0</strong><small>Primary beneficiaries</small></div><div><span>Fingerprint coverage</span><strong id="coverage">—</strong><small id="missing-count">Across all people</small></div><div><span>Payment cycle entries</span><strong id="cycle-count">0</strong><small>Occurrences of householdId</small></div></section>
+<section class="results"><div class="results-heading"><div><h2>Extracted data</h2><p>Review each file or explore the combined results.</p></div><div class="actions"><a href="/api/export/csv">Combined CSV</a><a href="/api/export/xlsx">Combined Excel</a><button class="subtle" id="clear">Clear all</button></div></div><div class="filters"><label>Search<input id="search" type="search" placeholder="Name, household, file…"></label><label>Record type<select id="role"><option value="">All types</option><option>BIN</option><option>ALT-1</option><option>ALT-2</option><option value="ALT">All alternates</option></select></label><label>Fingerprint status<select id="status"><option value="">All statuses</option><option value="present">Present</option><option value="missing">Missing</option></select></label></div><div id="files"><div class="empty">Your files will appear here after decryption.</div></div></section>
+<footer>Files and decrypted results stay in this local process. Results expire after 30 minutes of inactivity. Clear all removes them immediately.</footer>
+</main><dialog id="details"><div class="dialog-heading"><h2 id="detail-title">Full data</h2><button id="close" aria-label="Close details">×</button></div><pre id="detail-body"></pre></dialog>
+</body></html>
