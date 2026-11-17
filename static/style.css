@@ -7,3 +7,10 @@
 .warning-result{color:#b42318}.pill.warning-result{color:#b42318;background:#fdecec}
 
 .fingerprint-summary{padding:0 23px}
+
+#processing-progress{margin:16px 0;padding:16px 20px;border:1px solid #d8e3dd;border-radius:10px;background:white}
+#progress-label{display:block;margin-bottom:10px;color:#276451}
+#upload-progress{display:block;width:100%;height:18px;accent-color:#14745d}
+#detail-controls{padding:14px 0;flex-wrap:wrap}
+#detail-download{color:#14745d;margin-left:auto}
+#detail-body{min-height:180px;max-height:60vh}

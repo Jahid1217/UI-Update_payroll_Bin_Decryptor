@@ -38,3 +38,7 @@ Run backend checks:
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+Large web results: the browser requests summary rows without duplicating raw biometric data. **View full data** and person **View** load JSON in 64,000-character sections; Previous/Next section reaches the complete content, including large fields and the final record. **Download complete JSON** streams the complete decrypted document. The progress bar shows upload byte percentage, then server stages (reading, decrypting, parsing, processing households, and counting payments). Decryption and parsing use an indeterminate bar; household processing reports measured progress. Results appear after the batch completes.
+
+Local viewer endpoints: `GET /api/files?compact=1` and `POST /api/upload?compact=1&job=<id>` return summaries; omitting compact preserves the existing full response. `GET /api/progress/<id>` reports the current browser session's stage and optional percent. `GET /api/data/<file-id>?page=0` returns text, page, start character, and has_more; concatenate successive text sections to recover the entire JSON. Add `row=<zero-based-index>` for a person's details, or `download=1` for complete JSON. These endpoints use the same session expiry and local access restrictions as the viewer.

@@ -59,6 +59,47 @@ class ViewerTests(unittest.TestCase):
         self.assertNotIn('error',result.json['files'][0])
         self.assertGreater(len(result.json['files'][0]['rows']),0)
 
+    def test_large_full_data_sections_and_download(self):
+        data = {'metadata': 'Unicode: \u09ac\u09be\u0982\u09b2\u09be', 'payrollHouseHolds': [
+            {'houseHoldNumber': f'H{i}', 'firstName': f'Person {i}',
+             'biometric': {'photo': 'x' * 70000}} for i in range(3)], 'lastField': 'END'}
+        payload = AES.new(bytes.fromhex(KEY), AES.MODE_CBC, bytes.fromhex(IV)).encrypt(
+            pad(json.dumps(data).encode(), 16))
+        result = self.client.post('/api/upload?compact=1&job=large-test',
+            data={'files': (io.BytesIO(payload), 'large.bin')}, headers={'X-Viewer-Request': '1'})
+        self.assertEqual(result.status_code, 200)
+        file = result.json['files'][0]
+        self.assertNotIn('data', file)
+        self.assertNotIn('details', file['rows'][0])
+        self.assertEqual(len(file['rows']), 3)
+        self.assertLess(len(result.data), 10000)
+        url = '/api/data/' + file['id']
+        sections = []
+        for page in range(20):
+            section = self.client.get(url + f'?page={page}').json
+            self.assertLessEqual(len(section['text']), 64000)
+            sections.append(section['text'])
+            if not section['has_more']:
+                break
+        self.assertGreater(len(sections), 3)
+        self.assertEqual(json.loads(''.join(sections)), data)
+        download = self.client.get(url + '?download=1')
+        self.assertEqual(json.loads(download.data), data)
+        self.assertIn('attachment', download.headers['Content-Disposition'])
+        person = self.client.get(url + '?row=2').json
+        # A person's large photo also spans sections without being truncated.
+        person_next = self.client.get(url + '?row=2&page=1').json
+        self.assertEqual(json.loads(person['text'] + person_next['text'])['person'], data['payrollHouseHolds'][2])
+        self.assertEqual(self.client.get(url + '?row=-1').status_code, 400)
+        self.assertEqual(self.client.get(url + '?page=-1').status_code, 400)
+        self.assertEqual(self.client.get('/api/progress/large-test').json,
+                         {'stage': 'Processing complete', 'percent': 100})
+        stranger = app.test_client()
+        self.assertEqual(stranger.get(url).status_code, 404)
+        self.assertIsNone(stranger.get('/api/progress/large-test').json['percent'])
+        self.client.post('/api/clear', headers={'X-Viewer-Request': '1'})
+        self.assertEqual(self.client.get(url).status_code, 404)
+
     def test_upload_limits(self):
         self.assertEqual(self.client.post('/api/upload', headers={'X-Viewer-Request':'1'}).status_code,400)
         original_limit = app.config['MAX_CONTENT_LENGTH']

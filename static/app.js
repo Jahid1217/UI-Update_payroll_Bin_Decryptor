@@ -9,17 +9,66 @@ $('picker').onchange = e => pick(e.target.files);
 ['dragover','dragleave','drop'].forEach(type => $('drop').addEventListener(type,e => { e.preventDefault(); $('drop').classList.toggle('drag',type==='dragover'); if(type==='drop' && !busy) pick(e.dataTransfer.files); }));
 async function api(url, options={}) { const res = await fetch(url,options); const data = await res.json(); if(!res.ok) throw new Error(data.error || 'Request failed'); return data; }
 function setBusy(value) { busy=value; $('process').disabled=value || !selected.length; $('clear').disabled=value; $('picker').disabled=value; $('process').textContent=value ? 'Decrypting…' : 'Decrypt & view data →'; }
-$('process').onclick = async () => { const form = new FormData(); selected.forEach(f=>form.append('files',f)); setBusy(true); $('message').textContent=''; try { files=(await api('/api/upload',{method:'POST',headers:{'X-Viewer-Request':'1'},body:form})).files; pick([]); $('picker').value=''; render(); } catch(e) { $('message').textContent=e.message; } finally {setBusy(false);} };
+function showProgress(label, percent) {
+ $('processing-progress').hidden=false;$('progress-label').textContent=label;
+ if(percent==null)$('upload-progress').removeAttribute('value');else $('upload-progress').value=percent;
+}
+function uploadWithProgress(form, job, onUploaded) {
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST',`/api/upload?compact=1&job=${encodeURIComponent(job)}`);
+  xhr.setRequestHeader('X-Viewer-Request','1');
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)showProgress(`Uploading: ${Math.round(e.loaded/e.total*100)}%`,e.loaded/e.total*100);};
+  xhr.upload.onload=()=>{showProgress('Upload complete. Waiting for decryption...',null);onUploaded();};
+  xhr.onerror=()=>reject(new Error('Connection lost. Check the local server and retry.'));
+  xhr.onabort=()=>reject(new Error('Upload cancelled.'));
+  xhr.onload=()=>{try{const data=JSON.parse(xhr.responseText);if(xhr.status<200||xhr.status>=300)throw new Error(data.error||'Upload failed');resolve(data);}catch(e){reject(e);}};
+  xhr.send(form);
+ });
+}
+$('process').onclick = async () => {
+ const form=new FormData();selected.forEach(f=>form.append('files',f));
+ setBusy(true);$('message').textContent='';showProgress('Preparing upload...',0);
+ let timer, finished=false;
+ try {
+  await ready;
+  const job=crypto.randomUUID();
+  const poll=async()=>{try{const status=await api(`/api/progress/${job}`);if(!finished)showProgress(status.stage,status.percent);}catch(e){}if(!finished)timer=setTimeout(poll,500);};
+  files=(await uploadWithProgress(form,job,()=>{if(!finished)poll();})).files;
+  finished=true;clearTimeout(timer);showProgress('Preparing results...',null);
+  await new Promise(resolve=>requestAnimationFrame(()=>setTimeout(resolve,0)));
+  pick([]);$('picker').value='';render();showProgress('Complete - results are ready.',100);
+ } catch(e) {finished=true;clearTimeout(timer);$('message').textContent=e.message;showProgress('Processing failed. See the error below.',0);}
+ finally {setBusy(false);}
+};
 $('clear').onclick = async () => { setBusy(true); try {await api('/api/clear',{method:'POST',headers:{'X-Viewer-Request':'1'}}); files=[]; selected=[]; $('picker').value=''; pick([]); $('details').close(); $('detail-body').textContent=''; $('message').textContent=''; render();} catch(e){$('message').textContent=e.message;} finally{setBusy(false);} };
 function isWarningResult(value) { return /^(invalid\s*\/\s*non-fmr|other)$/i.test(String(value).trim()); }
-function details(title,data) {
- $('detail-title').textContent=title;
- const body=$('detail-body'), json=JSON.stringify(data,null,2);body.replaceChildren();
- let start=0;
- for(const match of json.matchAll(/"(?:Invalid\s*\/\s*Non-FMR|Other)"/gi)){body.append(document.createTextNode(json.slice(start,match.index)),node('span',match[0],'warning-result'));start=match.index+match[0].length;}
- body.append(document.createTextNode(json.slice(start)));$('details').showModal();
+let detailSource=null, detailPage=0, detailRequest=0;
+async function details(title,source) {
+ detailSource=source;detailPage=0;$('detail-title').textContent=title;
+ $('detail-download').href=source+'&download=1';$('detail-download').setAttribute('download','decrypted-data.json');
+ if(!$('details').open)$('details').showModal();
+ await loadDetailPage(0);
 }
-$('close').onclick=()=>{$('details').close(); $('detail-body').textContent='';};
+async function loadDetailPage(page) {
+ const version=++detailRequest;
+ $('detail-prev').disabled=true;$('detail-next').disabled=true;
+ $('detail-body').textContent='Loading data...';$('detail-page').textContent='';
+ try {
+  const result=await api(`${detailSource}&page=${page}`);
+  if(version!==detailRequest)return;
+  detailPage=page;const body=$('detail-body');body.replaceChildren();
+  let start=0;
+  for(const match of result.text.matchAll(/"(?:Invalid\s*\/\s*Non-FMR|Other)"/gi)){body.append(document.createTextNode(result.text.slice(start,match.index)),node('span',match[0],'warning-result'));start=match.index+match[0].length;}
+  body.append(document.createTextNode(result.text.slice(start)));body.scrollTop=0;
+  $('detail-page').textContent=`Section ${page+1} | Characters ${result.text.length?result.start+1:0}-${result.start+result.text.length}${result.has_more?' | More data follows':' | End of data'}`;
+  $('detail-prev').disabled=page===0;$('detail-next').disabled=!result.has_more;
+ }catch(e){if(version===detailRequest){$('detail-body').textContent=e.message;$('detail-prev').disabled=page===0;}}
+}
+$('detail-prev').onclick=()=>loadDetailPage(detailPage-1);
+$('detail-next').onclick=()=>loadDetailPage(detailPage+1);
+$('details').addEventListener('close',()=>{detailRequest++;$('detail-body').textContent='';detailSource=null;});
+$('close').onclick=()=>$('details').close();
 ['search','role','status'].forEach(id=>$(id).addEventListener('input',()=>{Object.keys(pages).forEach(k=>delete pages[k]);render();}));
 function render() {
  const good=files.filter(f=>!f.error), rows=good.flatMap(f=>f.rows), primary=rows.filter(r=>r.role==='BIN'), present=rows.filter(r=>r.fingerprints>0).length;
@@ -35,7 +84,7 @@ function render() {
  if(!f.error){ const households=f.rows.filter(r=>r.role==='BIN').length, alternates=f.rows.filter(r=>r.role.startsWith('ALT-')).length;title.append(node('p',`${households} Households \u00b7 ${alternates} Alternates \u00b7 ${f.cycles} Payment Cycle Entries`,'file-count-summary')); }
  head.append(title);section.append(head);
  if(f.error){section.append(node('p',f.error,'error-text'));$('files').append(section);return;}
- const actions=node('div',undefined,'actions'), full=node('button','View full data','subtle');full.onclick=()=>details(f.name,f.data);actions.append(full);
+ const actions=node('div',undefined,'actions'), full=node('button','View full data','subtle');full.onclick=()=>details(f.name,`/api/data/${f.id}?view=full`);actions.append(full);
  ['csv','xlsx'].forEach(kind=>{const a=node('a',kind==='csv'?'Download CSV':'Download Excel');a.href=`/api/export/${kind}?file=${encodeURIComponent(f.id)}`;actions.append(a);});head.append(actions);
  const roles=[...new Set(f.rows.map(r=>r.role))].sort((a,b)=>a==='BIN'?-1:b==='BIN'?1:a.localeCompare(b,undefined,{numeric:true}));
  const verification=roles.map(role=>{const group=f.rows.filter(r=>r.role===role), present=group.filter(r=>r.fingerprints>0).length;return `${role}: ${present}/${group.length} with fingerprints (${present===group.length?'MATCH':'NOT MATCH'})`;}).join(' \u00b7 ');
@@ -46,10 +95,11 @@ function render() {
  const filtered=f.rows.filter(r=>(!query || `${f.name} ${r.household} ${r.name} ${r.role}`.toLowerCase().includes(query)) && (!role || (role==='ALT'?r.role.startsWith('ALT-'):r.role===role)) && (!status || (status==='present'?r.fingerprints>0:r.fingerprints===0)));
  const page=Math.min(pages[f.id]||0,Math.max(0,Math.ceil(filtered.length/50)-1));pages[f.id]=page;
  const wrap=node('div',undefined,'table-wrap'), table=node('table'), thead=node('thead'), tr=node('tr');['Household','Type','Name','Photo','Fingerprints','Status','FMR signatures','Invalid / non-FMR','Details'].forEach(t=>{const th=node('th',t);th.scope='col';tr.append(th);});thead.append(tr);table.append(thead);const tbody=node('tbody');
- filtered.slice(page*50,page*50+50).forEach(r=>{const line=node('tr');[r.household,r.role,r.name,r.photo?'Present':'Missing',r.fingerprints].forEach(v=>line.append(node('td',v)));const cell=node('td');cell.append(node('span',r.status,`pill${isWarningResult(r.status)?' warning-result':r.fingerprints?'':' missing'}`));line.append(cell);line.append(node('td',r.fmr_count),node('td',r.invalid_templates,r.invalid_templates>0?'warning-result':undefined));const detail=node('td'), btn=node('button','View','detail-button');btn.onclick=()=>details(`${r.role} · ${r.name}`,{fingerprintTemplateChecks:r.template_checks,person:r.details});detail.append(btn);line.append(detail);tbody.append(line);});table.append(tbody);wrap.append(table);section.append(wrap);
+ filtered.slice(page*50,page*50+50).forEach(r=>{const line=node('tr');[r.household,r.role,r.name,r.photo?'Present':'Missing',r.fingerprints].forEach(v=>line.append(node('td',v)));const cell=node('td');cell.append(node('span',r.status,`pill${isWarningResult(r.status)?' warning-result':r.fingerprints?'':' missing'}`));line.append(cell);line.append(node('td',r.fmr_count),node('td',r.invalid_templates,r.invalid_templates>0?'warning-result':undefined));const detail=node('td'), btn=node('button','View','detail-button');btn.onclick=()=>details(`${r.role} · ${r.name}`,`/api/data/${f.id}?row=${f.rows.indexOf(r)}`);detail.append(btn);line.append(detail);tbody.append(line);});table.append(tbody);wrap.append(table);section.append(wrap);
  if(!filtered.length)section.append(node('div','No records match the filters.','empty'));
  const pager=node('div',undefined,'pagination');pager.append(node('span',`${filtered.length} matching records · Page ${page+1} of ${Math.max(1,Math.ceil(filtered.length/50))}`));
  [['Previous',-1],['Next',1]].forEach(([label,delta])=>{const b=node('button',label,'subtle');b.disabled=delta<0?page===0:(page+1)*50>=filtered.length;b.onclick=()=>{pages[f.id]=page+delta;render();};pager.append(b);});section.append(pager);$('files').append(section);
  });
 }
-api('/api/files').then(data=>{files=data.files;render();}).catch(e=>$('message').textContent=e.message);
+const ready=api('/api/files?compact=1').then(data=>{files=data.files;render();});
+ready.catch(e=>$('message').textContent=e.message);
