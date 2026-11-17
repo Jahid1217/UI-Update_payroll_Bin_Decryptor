@@ -31,7 +31,7 @@ The combined summary counts primary households, fingerprint coverage across all 
 
 The viewer reuses `Bin.py` AES-CBC/PKCS7 decryption and fingerprint checks. The existing key and IV remain the defaults; override with the `BIN_AES_KEY` and `BIN_AES_IV` environment variables if required. The original CLI still works.
 
-Uploads are processed in memory; the web viewer does not write decrypted files. Results belong to a browser session, expire after 30 minutes of inactivity (purged on the next data request), and disappear on Clear all or server restart. Downloaded exports remain on your computer. Limits: 32 MB per upload batch and 50 files per session. Use one local server process. Do not expose it via a public proxy or change the loopback bind without adding authentication and access controls. No external fonts, scripts, or services are used.
+Uploads are processed in memory; the web viewer does not write decrypted files. Results belong to a browser session, expire after 30 minutes of inactivity (purged on the next data request), and disappear on Clear all or server restart. Downloaded exports remain on your computer. Limits: 1 GB per upload batch and 50 files per session. Use one local server process. Do not expose it via a public proxy or change the loopback bind without adding authentication and access controls. No external fonts, scripts, or services are used.
 
 Run backend checks:
 

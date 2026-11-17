@@ -16,8 +16,8 @@ def load_file(path):
     try:
         if Path(path).suffix.lower() != '.bin':
             raise ValueError('Choose a .bin file.')
-        if Path(path).stat().st_size > 32 * 1024 * 1024:
-            raise ValueError('File exceeds the 32 MB limit.')
+        if Path(path).stat().st_size > 1024 * 1024 * 1024:
+            raise ValueError('File exceeds the 1 GB limit.')
         payload = Path(path).read_bytes()
         if not payload or len(payload) % 16:
             raise ValueError('Empty or invalid AES BIN file.')

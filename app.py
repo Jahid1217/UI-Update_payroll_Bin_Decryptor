@@ -8,12 +8,12 @@ from threading import RLock
 from zipfile import ZipFile, ZIP_DEFLATED
 from xml.sax.saxutils import escape
 
-from flask import Flask, jsonify, request, session, send_file
+from flask import Flask, jsonify, request, session, send_file, Response
 from Bin import decrypt_aes_cbc_pkcs7, hex_to_bytes, check_fingerprints, check_fingerprint_templates, count_household_ids, is_fmr
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
-app.config.update(MAX_CONTENT_LENGTH=32 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
+app.config.update(MAX_CONTENT_LENGTH=1024 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
 KEY = os.environ.get('BIN_AES_KEY', 'dd8de506bd4a90418afe9372f01b979b6f0df2e8aae22ec90b09a0bc197dc80c')
 IV = os.environ.get('BIN_AES_IV', '4a6f8e2f8a0c5d3e4b6c8d9e0f1a2b3c')
 cache = {}
@@ -78,7 +78,7 @@ def private(response):
 
 @app.errorhandler(413)
 def too_large(error):
-    return jsonify(error='Upload limit is 32 MB per batch.'), 413
+    return jsonify(error='Upload limit is 1 GB per batch.'), 413
 
 
 @app.route('/')
@@ -86,13 +86,71 @@ def index():
     return app.send_static_file('index.html')
 
 
+@app.get('/favicon.ico')
+def favicon():
+    return app.send_static_file('favicon.svg')
+
+
 @app.get('/api/files')
 def files():
-    return jsonify(files=state()['files'])
+    return jsonify(files=visible_files(state()))
+
+
+def visible_files(current):
+    if request.args.get('compact') != '1':
+        return current['files']
+    return [{**{k: v for k, v in f.items() if k not in ('data', 'rows')},
+             'rows': [{k: v for k, v in row.items() if k != 'details'} for row in f['rows']]}
+            for f in current['files']]
+
+
+@app.get('/api/progress/<job>')
+def progress(job):
+    return jsonify(state().get('progress', {}).get(job, {'stage': 'Receiving upload', 'percent': None}))
+
+
+@app.get('/api/data/<file_id>')
+def full_data(file_id):
+    item = next((f for f in state()['files'] if f['id'] == file_id and not f.get('error')), None)
+    if item is None:
+        return jsonify(error='File is no longer available. Upload it again.'), 404
+    data = item['data']
+    if 'row' in request.args:
+        row = request.args.get('row', type=int)
+        if row is None or row < 0 or row >= len(item['rows']):
+            return jsonify(error='Invalid record'), 400
+        record = item['rows'][row]
+        data = {'fingerprintTemplateChecks': record['template_checks'], 'person': record['details']}
+    encoder = json.JSONEncoder(ensure_ascii=True, indent=2)
+    if request.args.get('download') == '1':
+        return Response(encoder.iterencode(data), mimetype='application/json',
+                        headers={'Content-Disposition': 'attachment; filename="decrypted-data.json"'})
+    page = request.args.get('page', default=0, type=int)
+    if page is None or page < 0:
+        return jsonify(error='Invalid page'), 400
+    size = 64000
+    start, end = page * size, (page + 1) * size
+    parts, position, more = [], 0, False
+    for chunk in encoder.iterencode(data):
+        chunk_end = position + len(chunk)
+        if chunk_end > start and position < end:
+            parts.append(chunk[max(0, start - position):end - position])
+        position = chunk_end
+        if position > end:
+            more = True
+            break
+    return jsonify(text=''.join(parts), page=page, has_more=more, start=start)
 
 
 @app.post('/api/upload')
 def upload():
+    current = state()
+    job = request.args.get('job', '')[:80]
+    with lock:
+        current['progress'] = {job: {'stage': 'Receiving upload', 'percent': None}}
+    def report(stage, percent=None):
+        with lock:
+            current['progress'][job] = {'stage': stage, 'percent': percent}
     incoming = request.files.getlist('files')
     if not incoming:
         return jsonify(error='Choose at least one BIN file.'), 400
@@ -100,32 +158,43 @@ def upload():
     if len(current['files']) + len(incoming) > 50:
         return jsonify(error='Maximum 50 files. Clear results before uploading more.'), 400
     results = []
-    for uploaded in incoming:
+    for file_index, uploaded in enumerate(incoming):
         name = (uploaded.filename or 'Unnamed').replace('\\', '/').split('/')[-1]
         result = {'id': secrets.token_hex(12), 'name': name, 'rows': [], 'cycles': 0}
         try:
             if not name.lower().endswith('.bin'):
                 raise ValueError('Only .bin files are supported')
+            report(f'Reading file {file_index + 1} of {len(incoming)}')
             payload = uploaded.read()
             if not payload or len(payload) % 16:
                 raise ValueError('Empty or invalid AES BIN file')
-            data = json.loads(decrypt_aes_cbc_pkcs7(payload, hex_to_bytes(KEY), hex_to_bytes(IV)))
+            report(f'Decrypting file {file_index + 1} of {len(incoming)}')
+            decoded = decrypt_aes_cbc_pkcs7(payload, hex_to_bytes(KEY), hex_to_bytes(IV))
+            del payload
+            report(f'Parsing file {file_index + 1} of {len(incoming)}')
+            data = json.loads(decoded)
+            del decoded
             records = extract(data)
             rows = []
-            for household in records:
+            for record_index, household in enumerate(records):
+                if record_index % 100 == 0:
+                    report(f'Processing file {file_index + 1} of {len(incoming)}: household {record_index + 1} of {len(records)}',
+                           100 * (file_index + record_index / max(1, len(records))) / len(incoming))
                 number = household.get('houseHoldNumber') or household.get('householdNumber') or 'N/A'
                 rows.append(person_row(household, number, 'BIN'))
                 alternates = household.get('payrollAlternates') or household.get('alternates') or []
                 if not isinstance(alternates, list):
                     raise ValueError('Invalid alternate records')
                 rows.extend(person_row(p, number, f'ALT-{i}') for i, p in enumerate(alternates, 1))
+            report(f'Counting payment entries in file {file_index + 1} of {len(incoming)}')
             result.update(rows=rows, cycles=count_household_ids(data), data=data)
         except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
             result['error'] = 'Invalid file, decryption failed, or unsupported payroll structure.'
         results.append(result)
     with lock:
         current['files'].extend(results)
-    return jsonify(files=current['files'])
+    report('Processing complete', 100)
+    return jsonify(files=visible_files(current))
 
 
 @app.post('/api/clear')

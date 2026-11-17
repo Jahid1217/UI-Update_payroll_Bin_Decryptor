@@ -61,11 +61,15 @@ class ViewerTests(unittest.TestCase):
 
     def test_upload_limits(self):
         self.assertEqual(self.client.post('/api/upload', headers={'X-Viewer-Request':'1'}).status_code,400)
+        original_limit = app.config['MAX_CONTENT_LENGTH']
+        self.assertEqual(original_limit, 1024 * 1024 * 1024)
         app.config['MAX_CONTENT_LENGTH']=100
         try:
-            self.assertEqual(self.upload().status_code,413)
+            response = self.upload()
+            self.assertEqual(response.status_code,413)
+            self.assertEqual(response.json['error'], 'Upload limit is 1 GB per batch.')
         finally:
-            app.config['MAX_CONTENT_LENGTH']=32*1024*1024
+            app.config['MAX_CONTENT_LENGTH']=original_limit
 
 
 if __name__ == '__main__':
